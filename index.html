@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>2倍 or 0（オールイン + 金庫 + 記録/競走）</title>
+  <title>2倍 or 0（オールイン固定 + 金庫 + 記録/競走）</title>
   <style>
     body { font-family: system-ui, sans-serif; max-width: 820px; margin: 28px auto; padding: 0 14px; }
     .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; margin-bottom: 14px; }
@@ -66,7 +66,7 @@
       <input id="withdrawAmt" type="number" min="1" placeholder="引き出す額（金庫→手持ち）" />
       <button id="withdraw">引き出す</button>
 
-      <button id="depositAll">手持ち全部を預ける</button>
+      <button id="depositHalf">手持ちの半分を預ける</button>
       <button id="withdrawAll">金庫全部を引き出す</button>
     </div>
   </div>
@@ -82,16 +82,10 @@
         <button id="clearBest">最高記録を消す</button>
       </div>
     </div>
-    <p class="muted">※ 最高合計資産 = 手持ち + 金庫 の最大値。勝負中/退避後も含めて更新されます。</p>
   </div>
 
   <div class="card">
     <h2 style="margin-top:0;">仲間内で競走（共有コード）</h2>
-    <p class="muted">
-      仕組み：各自が出した「共有コード」を、チャットなどで交換してこのページに貼るだけ。<br>
-      サーバー無しなので、リンクを知っている仲間同士で気軽に楽しめます。
-    </p>
-
     <div class="row">
       <button id="makeCode">自分の共有コードを作る</button>
       <button id="copyCode" disabled>コピー</button>
@@ -99,7 +93,7 @@
     </div>
 
     <div class="muted" style="margin-top:8px;">自分の共有コード：</div>
-    <textarea id="myCode" readonly placeholder="ここにコードが出ます"></textarea>
+    <textarea id="myCode" readonly></textarea>
 
     <div class="muted" style="margin-top:12px;">相手のコードを貼って追加：</div>
     <div class="row">
@@ -120,7 +114,6 @@
       </thead>
       <tbody id="boardBody"></tbody>
     </table>
-    <div class="muted">※ コードは軽い改ざん耐性のチェック付き（強い認証ではありません）。仲間内の遊び向けです。</div>
   </div>
 
   <div class="card">
@@ -129,374 +122,126 @@
   </div>
 
   <script>
-    // ===== 設定 =====
     const INITIAL_WALLET = 100;
     const INITIAL_VAULT  = 0;
 
-    // ===== localStorage keys =====
     const LS_PLAYER = "don_player_name_v1";
-    const LS_BEST   = "don_best_v1";     // { bestTotal:number, bestAt:number, label:string }
-    const LS_BOARD  = "don_board_v1";    // array of entries
+    const LS_BEST   = "don_best_v1";
+    const LS_BOARD  = "don_board_v1";
 
-    // ===== 状態 =====
     let wallet = INITIAL_WALLET;
     let vault  = INITIAL_VAULT;
     let turn = 0, wins = 0, losses = 0;
 
-    // ===== 要素 =====
     const walletEl = document.getElementById("wallet");
     const vaultEl  = document.getElementById("vault");
     const totalEl  = document.getElementById("total");
     const turnEl   = document.getElementById("turn");
     const winsEl   = document.getElementById("wins");
     const lossesEl = document.getElementById("losses");
-
     const resultEl = document.getElementById("result");
     const logEl    = document.getElementById("log");
-
     const bestTotalEl = document.getElementById("bestTotal");
     const bestAtEl    = document.getElementById("bestAt");
     const bestLabelEl = document.getElementById("bestLabel");
-
     const playerNameInput = document.getElementById("playerName");
-
     const myCodeTA = document.getElementById("myCode");
     const copyBtn  = document.getElementById("copyCode");
     const theirCodeInput = document.getElementById("theirCode");
     const boardBody = document.getElementById("boardBody");
 
-    function fmt(n) { return Number(n).toLocaleString(); }
-    function now() { return Date.now(); }
-    function dt(ts) {
-      try { return new Date(ts).toLocaleString(); }
-      catch { return ""; }
-    }
-    function addLog(line) {
-      logEl.textContent = (line + "\n") + logEl.textContent;
-    }
+    function fmt(n){ return Number(n).toLocaleString(); }
+    function now(){ return Date.now(); }
+    function dt(ts){ return ts ? new Date(ts).toLocaleString() : "—"; }
+    function addLog(t){ logEl.textContent = t + "\n" + logEl.textContent; }
 
-    // ===== 最高資産 =====
-    function loadBest() {
-      try {
-        const raw = localStorage.getItem(LS_BEST);
-        if (!raw) return { bestTotal: 0, bestAt: 0, label: "" };
-        const obj = JSON.parse(raw);
-        if (typeof obj.bestTotal !== "number") return { bestTotal: 0, bestAt: 0, label: "" };
-        return obj;
-      } catch {
-        return { bestTotal: 0, bestAt: 0, label: "" };
-      }
+    function loadBest(){
+      try{ return JSON.parse(localStorage.getItem(LS_BEST)) || {bestTotal:0,bestAt:0,label:""}; }
+      catch{ return {bestTotal:0,bestAt:0,label:""}; }
     }
-    function saveBest(best) {
-      localStorage.setItem(LS_BEST, JSON.stringify(best));
-    }
-    function maybeUpdateBest(reasonLabel) {
+    function saveBest(b){ localStorage.setItem(LS_BEST, JSON.stringify(b)); }
+    function maybeUpdateBest(label){
       const total = wallet + vault;
       const best = loadBest();
-      if (total > (best.bestTotal || 0)) {
-        const updated = { bestTotal: total, bestAt: now(), label: reasonLabel || "" };
-        saveBest(updated);
+      if(total > best.bestTotal){
+        const upd = {bestTotal:total,bestAt:now(),label};
+        saveBest(upd);
         renderBest();
-        addLog(`🏆 最高資産更新！ total=${fmt(total)}（${reasonLabel || "更新"}）`);
+        addLog(`🏆 最高資産更新 ${fmt(total)}`);
       }
     }
-    function renderBest() {
-      const best = loadBest();
-      bestTotalEl.textContent = fmt(best.bestTotal || 0);
-      bestAtEl.textContent = best.bestAt ? dt(best.bestAt) : "—";
-      bestLabelEl.textContent = best.label ? best.label : "—";
+    function renderBest(){
+      const b = loadBest();
+      bestTotalEl.textContent = fmt(b.bestTotal);
+      bestAtEl.textContent = dt(b.bestAt);
+      bestLabelEl.textContent = b.label || "—";
     }
 
-    // ===== プレイヤー名 =====
-    function loadPlayerName() {
-      return localStorage.getItem(LS_PLAYER) || "";
-    }
-    function savePlayerName(name) {
-      localStorage.setItem(LS_PLAYER, name);
-    }
-
-    // ===== 共有コード（軽いチェック付き）=====
-    // ※本気の改ざん防止ではないです。仲間内の遊び用。
-    function checksum(str) {
-      let h = 0;
-      for (let i = 0; i < str.length; i++) {
-        h = (h * 31 + str.charCodeAt(i)) >>> 0;
-      }
-      return h.toString(16);
-    }
-    function encodePayload(obj) {
-      const json = JSON.stringify(obj);
-      const sig = checksum(json);
-      const pack = JSON.stringify({ json, sig });
-      // base64 (URL安全寄り)
-      return btoa(unescape(encodeURIComponent(pack))).replaceAll("=", "").replaceAll("+", "-").replaceAll("/", "_");
-    }
-    function decodePayload(code) {
-      const b64 = code.replaceAll("-", "+").replaceAll("_", "/");
-      // パディング復元
-      const pad = b64.length % 4 ? "=".repeat(4 - (b64.length % 4)) : "";
-      const pack = decodeURIComponent(escape(atob(b64 + pad)));
-      const { json, sig } = JSON.parse(pack);
-      if (checksum(json) !== sig) throw new Error("checksum mismatch");
-      return JSON.parse(json);
-    }
-
-    // ===== ランキング（この端末）=====
-    function loadBoard() {
-      try {
-        const raw = localStorage.getItem(LS_BOARD);
-        if (!raw) return [];
-        const arr = JSON.parse(raw);
-        return Array.isArray(arr) ? arr : [];
-      } catch { return []; }
-    }
-    function saveBoard(arr) {
-      localStorage.setItem(LS_BOARD, JSON.stringify(arr));
-    }
-    function upsertBoardEntry(entry) {
-      const board = loadBoard();
-      // 同じnameなら最高値が高い方を採用（同値なら新しい方）
-      const idx = board.findIndex(e => e.name === entry.name);
-      if (idx >= 0) {
-        const cur = board[idx];
-        if (entry.bestTotal > cur.bestTotal || (entry.bestTotal === cur.bestTotal && entry.bestAt > cur.bestAt)) {
-          board[idx] = entry;
-        }
-      } else {
-        board.push(entry);
-      }
-      // 降順ソート
-      board.sort((a,b) => (b.bestTotal - a.bestTotal) || (b.bestAt - a.bestAt));
-      saveBoard(board);
-      renderBoard();
-    }
-    function removeBoardName(name) {
-      const board = loadBoard().filter(e => e.name !== name);
-      saveBoard(board);
-      renderBoard();
-    }
-    function renderBoard() {
-      const board = loadBoard();
-      const me = loadPlayerName() || "（未設定）";
-      boardBody.innerHTML = "";
-      board.forEach((e, i) => {
-        const tr = document.createElement("tr");
-        const isMe = (e.name === me);
-        tr.innerHTML = `
-          <td>${i + 1}</td>
-          <td>${isMe ? "👤 " : ""}${escapeHtml(e.name)}</td>
-          <td><strong>${fmt(e.bestTotal)}</strong></td>
-          <td>${e.bestAt ? dt(e.bestAt) : "—"}</td>
-          <td><button data-del="${escapeHtmlAttr(e.name)}">削除</button></td>
-        `;
-        boardBody.appendChild(tr);
-      });
-
-      // 削除ボタン
-      boardBody.querySelectorAll("button[data-del]").forEach(btn => {
-        btn.addEventListener("click", () => removeBoardName(btn.getAttribute("data-del")));
-      });
-    }
-
-    function escapeHtml(s) {
-      return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#39;");
-    }
-    function escapeHtmlAttr(s) {
-      // 属性用に最低限
-      return String(s).replaceAll('"',"&quot;");
-    }
-
-    // ===== 画面更新 =====
-    function render() {
+    function render(){
       walletEl.textContent = fmt(wallet);
-      vaultEl.textContent  = fmt(vault);
-      totalEl.textContent  = fmt(wallet + vault);
-      turnEl.textContent   = String(turn);
-      winsEl.textContent   = String(wins);
-      lossesEl.textContent = String(losses);
-
-      document.getElementById("play").disabled = (wallet <= 0);
-
-      // 最高資産チェック（表示更新は maybeUpdateBest 内でやる）
-      // ここでは「単に状態が変わったら」追従させたいのでラベル無しでは更新しない
+      vaultEl.textContent = fmt(vault);
+      totalEl.textContent = fmt(wallet+vault);
+      turnEl.textContent = turn;
+      winsEl.textContent = wins;
+      lossesEl.textContent = losses;
+      document.getElementById("play").disabled = wallet<=0;
     }
 
-    // ===== 勝負（オールイン）=====
-    document.getElementById("play").addEventListener("click", () => {
-      if (wallet <= 0) return;
-
+    document.getElementById("play").addEventListener("click",()=>{
+      if(wallet<=0)return;
       turn++;
       const bet = wallet;
       wallet = 0;
-
-      const win = Math.random() < 0.5;
-
-      if (win) {
+      if(Math.random()<0.5){
         wins++;
-        wallet = bet * 2;
-        resultEl.textContent = `#${turn}: ✅ 勝ち！ ${fmt(bet)} → ${fmt(wallet)}`;
-        addLog(`#${turn}: ✅ 勝ち  wallet=${fmt(wallet)}  vault=${fmt(vault)}`);
-        maybeUpdateBest("勝負で更新");
-      } else {
+        wallet = bet*2;
+        resultEl.textContent = `#${turn}: 勝ち ${fmt(wallet)}`;
+        maybeUpdateBest("勝負");
+      }else{
         losses++;
-        wallet = 0;
-        resultEl.textContent = `#${turn}: ❌ 負け… ${fmt(bet)} → 0`;
-        addLog(`#${turn}: ❌ 負け  wallet=0  vault=${fmt(vault)}`);
+        resultEl.textContent = `#${turn}: 負け 0`;
       }
-
       render();
     });
 
-    // ===== 金庫操作 =====
-    document.getElementById("deposit").addEventListener("click", () => {
+    document.getElementById("deposit").addEventListener("click",()=>{
       const amt = Math.floor(Number(document.getElementById("depositAmt").value));
-      if (!amt || amt <= 0) { resultEl.textContent = "預ける額を1以上で入力してね。"; return; }
-      if (amt > wallet) { resultEl.textContent = "手持ちが足りないよ。"; return; }
-
-      wallet -= amt;
-      vault  += amt;
-      resultEl.textContent = `🏦 金庫に ${fmt(amt)} 預けた`;
-      addLog(`🏦 預け入れ amt=${fmt(amt)}  wallet=${fmt(wallet)}  vault=${fmt(vault)}`);
-      document.getElementById("depositAmt").value = "";
-      maybeUpdateBest("退避で更新");
+      if(!amt||amt<=0||amt>wallet)return;
+      wallet-=amt; vault+=amt;
+      maybeUpdateBest("退避");
       render();
     });
 
-    document.getElementById("withdraw").addEventListener("click", () => {
+    // ★ 半分預けるボタン
+    document.getElementById("depositHalf").addEventListener("click",()=>{
+      if(wallet<=1)return;
+      const amt = Math.floor(wallet/2);
+      wallet-=amt;
+      vault+=amt;
+      addLog(`🏦 半分預け ${fmt(amt)}`);
+      maybeUpdateBest("半分退避");
+      render();
+    });
+
+    document.getElementById("withdraw").addEventListener("click",()=>{
       const amt = Math.floor(Number(document.getElementById("withdrawAmt").value));
-      if (!amt || amt <= 0) { resultEl.textContent = "引き出す額を1以上で入力してね。"; return; }
-      if (amt > vault) { resultEl.textContent = "金庫が足りないよ。"; return; }
-
-      vault  -= amt;
-      wallet += amt;
-      resultEl.textContent = `🏦 金庫から ${fmt(amt)} 引き出した`;
-      addLog(`🏦 引き出し amt=${fmt(amt)}  wallet=${fmt(wallet)}  vault=${fmt(vault)}`);
-      document.getElementById("withdrawAmt").value = "";
+      if(!amt||amt<=0||amt>vault)return;
+      vault-=amt; wallet+=amt;
       render();
     });
 
-    document.getElementById("depositAll").addEventListener("click", () => {
-      if (wallet <= 0) { resultEl.textContent = "手持ちが0だよ。"; return; }
-      const amt = wallet;
-      wallet = 0;
-      vault += amt;
-      resultEl.textContent = `🏦 手持ち全部（${fmt(amt)}）を金庫へ`;
-      addLog(`🏦 全額預け amt=${fmt(amt)}  wallet=${fmt(wallet)}  vault=${fmt(vault)}`);
-      maybeUpdateBest("退避で更新");
+    document.getElementById("withdrawAll").addEventListener("click",()=>{
+      wallet+=vault; vault=0; render();
+    });
+
+    document.getElementById("reset").addEventListener("click",()=>{
+      wallet=INITIAL_WALLET; vault=INITIAL_VAULT;
+      turn=0; wins=0; losses=0;
       render();
     });
 
-    document.getElementById("withdrawAll").addEventListener("click", () => {
-      if (vault <= 0) { resultEl.textContent = "金庫が0だよ。"; return; }
-      const amt = vault;
-      vault = 0;
-      wallet += amt;
-      resultEl.textContent = `🏦 金庫全部（${fmt(amt)}）を手持ちへ`;
-      addLog(`🏦 全額引出 amt=${fmt(amt)}  wallet=${fmt(wallet)}  vault=${fmt(vault)}`);
-      render();
-    });
-
-    // ===== リセット =====
-    document.getElementById("reset").addEventListener("click", () => {
-      wallet = INITIAL_WALLET;
-      vault  = INITIAL_VAULT;
-      turn = 0; wins = 0; losses = 0;
-      resultEl.textContent = "";
-      logEl.textContent = "";
-      render();
-    });
-
-    // ===== 最高記録操作 =====
-    document.getElementById("clearBest").addEventListener("click", () => {
-      localStorage.removeItem(LS_BEST);
-      renderBest();
-      addLog("🗑️ 最高資産を削除");
-    });
-
-    // ===== 名前保存 =====
-    document.getElementById("saveName").addEventListener("click", () => {
-      const name = (playerNameInput.value || "").trim();
-      savePlayerName(name);
-      addLog(`👤 名前を保存：${name || "（未設定）"}`);
-      renderBoard(); // 👤表示更新
-    });
-
-    // ===== 共有コード作成 =====
-    document.getElementById("makeCode").addEventListener("click", () => {
-      const name = (loadPlayerName() || "").trim() || "名無し";
-      const best = loadBest();
-      const payload = {
-        v: 1,
-        name,
-        bestTotal: Number(best.bestTotal || 0),
-        bestAt: Number(best.bestAt || 0),
-      };
-      const code = encodePayload(payload);
-      myCodeTA.value = code;
-      copyBtn.disabled = !code;
-      addLog(`🔗 共有コード生成：${name} / ${fmt(payload.bestTotal)}`);
-    });
-
-    // コピー
-    document.getElementById("copyCode").addEventListener("click", async () => {
-      const code = myCodeTA.value.trim();
-      if (!code) return;
-      try {
-        await navigator.clipboard.writeText(code);
-        addLog("📋 共有コードをコピーした");
-      } catch {
-        // クリップボードが使えない場合のフォールバック
-        myCodeTA.focus();
-        myCodeTA.select();
-        document.execCommand("copy");
-        addLog("📋 共有コードをコピーした（互換モード）");
-      }
-    });
-
-    // 相手コード追加
-    document.getElementById("addCode").addEventListener("click", () => {
-      const code = (theirCodeInput.value || "").trim();
-      if (!code) { resultEl.textContent = "相手の共有コードを貼ってね。"; return; }
-      try {
-        const p = decodePayload(code);
-        if (!p || p.v !== 1) throw new Error("bad version");
-        if (typeof p.name !== "string" || typeof p.bestTotal !== "number") throw new Error("bad payload");
-
-        const entry = {
-          name: (p.name || "名無し").slice(0, 24),
-          bestTotal: Math.floor(p.bestTotal),
-          bestAt: Math.floor(p.bestAt || 0),
-        };
-        upsertBoardEntry(entry);
-        addLog(`🏁 参加：${entry.name} / ${fmt(entry.bestTotal)}`);
-        theirCodeInput.value = "";
-      } catch (e) {
-        resultEl.textContent = "コードが正しくないか、壊れています。";
-        addLog(`⚠️ コード追加失敗：${String(e && e.message ? e.message : e)}`);
-      }
-    });
-
-    // ランキング削除
-    document.getElementById("clearBoard").addEventListener("click", () => {
-      localStorage.removeItem(LS_BOARD);
-      renderBoard();
-      addLog("🗑️ ランキングを削除（この端末）");
-    });
-
-    // ===== 初期化 =====
-    playerNameInput.value = loadPlayerName();
     render();
     renderBest();
-    renderBoard();
-
-    // 自分もランキングに載せたい場合：最高記録があるなら自動で追加（任意）
-    // 仲間内の見栄えが良いのでONにしてあります
-    (function autoAddMeToBoard() {
-      const name = (loadPlayerName() || "").trim();
-      const best = loadBest();
-      if (!name || !best.bestTotal) return;
-      upsertBoardEntry({ name, bestTotal: best.bestTotal, bestAt: best.bestAt || 0 });
-    })();
   </script>
 </body>
 </html>
